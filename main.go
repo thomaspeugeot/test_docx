@@ -27,7 +27,6 @@ func addDir(zipWriter *zip.Writer, name string) error {
 		Name:   name,
 		Method: zip.Store, // no compression needed for directories
 	}
-	// Mark this as a directory.
 	header.SetMode(0755 | os.ModeDir)
 	_, err := zipWriter.CreateHeader(header)
 	return err
@@ -65,8 +64,9 @@ func GenerateDocxFromSvg(svgPath, legend, outputPath string) error {
         Target="word/document.xml"/>
 </Relationships>`
 
+	// Updated document.xml with additional required elements in the wp:inline element.
 	documentXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" 
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
             xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -82,7 +82,13 @@ func GenerateDocxFromSvg(svgPath, legend, outputPath string) error {
     <w:p>
       <w:r>
         <w:drawing>
-          <wp:inline>
+          <wp:inline distT="0" distB="0" distL="0" distR="0">
+            <wp:extent cx="3000000" cy="2000000"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:docPr id="1" name="Picture 1"/>
+            <wp:cNvGraphicFramePr>
+              <a:graphicFrameLocks noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
             <a:graphic>
               <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
                 <pic:pic>
@@ -135,7 +141,6 @@ func GenerateDocxFromSvg(svgPath, legend, outputPath string) error {
 	defer outFile.Close()
 
 	zipWriter := zip.NewWriter(outFile)
-	// Ensure the ZIP archive is closed properly.
 	defer zipWriter.Close()
 
 	// Add explicit directory entries.

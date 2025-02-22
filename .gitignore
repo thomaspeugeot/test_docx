@@ -1,0 +1,9 @@
+output.zip
+output/.DS_Store
+output/\[Content_Types].xml
+output/_rels/.rels
+output/word/.DS_Store
+output/word/document.xml
+output/word/_rels/document.xml.rels
+output/word/media/image1.svg
+output.docx

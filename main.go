@@ -45,7 +45,7 @@ func xmlEscape(s string) string {
 }
 
 // GenerateDocxFromSvgList creates a DOCX file that includes multiple SVG images
-// (each with a legend) in separate paragraphs.
+// (each with a legend placed after the image) in separate paragraphs.
 func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
 	// Read all SVG files and store their data.
 	svgDatas := make([][]byte, len(entries))
@@ -70,15 +70,8 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
 
 	// --- Build the document.xml content ---
 	var docBody bytes.Buffer
-	// For each SVG entry, add a paragraph for the legend and one for the image.
+	// For each SVG entry, add a paragraph with the image drawing and then a paragraph for the legend.
 	for i, entry := range entries {
-		// Paragraph with legend text.
-		docBody.WriteString(fmt.Sprintf(`
-    <w:p>
-      <w:r>
-        <w:t>%s</w:t>
-      </w:r>
-    </w:p>`, xmlEscape(entry.Legend)))
 		// Paragraph with the image drawing.
 		// Relationship id and media filename use (i+1).
 		docBody.WriteString(fmt.Sprintf(`
@@ -121,6 +114,13 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
         </w:drawing>
       </w:r>
     </w:p>`, fullWidthEmu, newHeightEmu, i+1, i+1, i+1, i+1, fullWidthEmu, newHeightEmu))
+		// Paragraph with legend text.
+		docBody.WriteString(fmt.Sprintf(`
+    <w:p>
+      <w:r>
+        <w:t>%s</w:t>
+      </w:r>
+    </w:p>`, xmlEscape(entry.Legend)))
 	}
 
 	// Wrap the body in the full document structure.

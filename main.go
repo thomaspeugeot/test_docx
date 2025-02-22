@@ -10,10 +10,18 @@ import (
 	"os"
 )
 
-// SVGEntry represents one SVG file and its associated legend.
-type SVGEntry struct {
-	Legend  string
+// DocumentEntry represents an element in the document. It can be either a figure (SVG with legend)
+// or a text paragraph.
+type DocumentEntry struct {
+	// Type can be "figure" or "text"
+	Type string
+
+	// For a figure entry, provide the path to the SVG file and the legend text.
 	SvgPath string
+	Legend  string
+
+	// For a text entry, provide the text.
+	Text string
 }
 
 // addFile writes a file entry to the ZIP archive.
@@ -44,37 +52,46 @@ func xmlEscape(s string) string {
 	return buf.String()
 }
 
-// GenerateDocxFromSvgList creates a DOCX file that includes multiple SVG images
-// (each with a legend placed after the image) in separate paragraphs.
-func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
-	// Read all SVG files and store their data.
-	svgDatas := make([][]byte, len(entries))
-	for i, entry := range entries {
-		data, err := ioutil.ReadFile(entry.SvgPath)
-		if err != nil {
-			return fmt.Errorf("error reading SVG file %q: %v", entry.SvgPath, err)
+// GenerateDocxFromEntries builds a DOCX file (ZIP archive) from a list of document entries.
+// Figure entries will output an image (SVG) and its legend; text entries output a text paragraph.
+func GenerateDocxFromEntries(entries []DocumentEntry, outputPath string) error {
+	// First, count how many figure entries there are and read their SVG files.
+	figureCount := 0
+	figureData := make([][]byte, 0)
+	for _, entry := range entries {
+		if entry.Type == "figure" {
+			figureCount++
+			data, err := ioutil.ReadFile(entry.SvgPath)
+			if err != nil {
+				return fmt.Errorf("error reading SVG file %q: %v", entry.SvgPath, err)
+			}
+			figureData = append(figureData, data)
 		}
-		svgDatas[i] = data
 	}
 
-	// --- Compute the full usable width in EMUs ---
-	// Given: page width = 11906 twips, margins = 1440 twips each.
-	// Usable width in twips = 11906 - 1440 - 1440 = 9026 twips.
-	// In points: 9026/20 ≈ 451.3, and 1 point ≈ 12700 EMUs.
-	fullWidthEmu := 5737100 // ≈ 451.3 * 12700
+	// --- Calculate the full usable width in EMUs ---
+	// We assume a page width of 11906 twips and left/right margins of 1440 twips.
+	// Usable width = 11906 - 1440 - 1440 = 9026 twips.
+	// One twip = 1/20 point, and one point ≈ 12700 EMUs.
+	fullWidthEmu := 5737100 // ≈ 9026/20 * 12700
 
-	// --- Determine scaled height ---
-	// Assume original image dimensions: width = 3000000 EMUs, height = 2000000 EMUs.
+	// --- Determine scaled height for images ---
+	// Assume an original image size of 3000000 EMUs (width) x 2000000 EMUs (height).
 	scaleFactor := float64(fullWidthEmu) / 3000000.0
 	newHeightEmu := int(2000000 * scaleFactor)
 
-	// --- Build the document.xml content ---
+	// --- Build the document body ---
+	// We'll iterate over the entries in order. For each "figure" entry, we increment a figure index,
+	// add a paragraph with the inline drawing, and then a paragraph with the legend.
+	// For "text" entries, we simply add a paragraph with the text.
 	var docBody bytes.Buffer
-	// For each SVG entry, add a paragraph with the image drawing and then a paragraph for the legend.
-	for i, entry := range entries {
-		// Paragraph with the image drawing.
-		// Relationship id and media filename use (i+1).
-		docBody.WriteString(fmt.Sprintf(`
+	figureIndex := 0
+
+	for _, entry := range entries {
+		if entry.Type == "figure" {
+			figureIndex++
+			// Paragraph with the image drawing.
+			docBody.WriteString(fmt.Sprintf(`
     <w:p>
       <w:r>
         <w:drawing>
@@ -113,17 +130,26 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
           </wp:inline>
         </w:drawing>
       </w:r>
-    </w:p>`, fullWidthEmu, newHeightEmu, i+1, i+1, i+1, i+1, fullWidthEmu, newHeightEmu))
-		// Paragraph with legend text.
-		docBody.WriteString(fmt.Sprintf(`
+    </w:p>`, fullWidthEmu, newHeightEmu, figureIndex, figureIndex, figureIndex, figureIndex, fullWidthEmu, newHeightEmu))
+			// Paragraph with the legend text.
+			docBody.WriteString(fmt.Sprintf(`
     <w:p>
       <w:r>
         <w:t>%s</w:t>
       </w:r>
     </w:p>`, xmlEscape(entry.Legend)))
+		} else if entry.Type == "text" {
+			// Paragraph with the text.
+			docBody.WriteString(fmt.Sprintf(`
+    <w:p>
+      <w:r>
+        <w:t>%s</w:t>
+      </w:r>
+    </w:p>`, xmlEscape(entry.Text)))
+		}
 	}
 
-	// Wrap the body in the full document structure.
+	// Wrap the body in the complete document structure.
 	documentXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -139,29 +165,29 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
 </w:document>`, docBody.String())
 
 	// --- Build the document relationships file (word/_rels/document.xml.rels) ---
-	// Each image gets its own relationship entry.
+	// Only figure entries need a relationship entry.
 	var docRels bytes.Buffer
 	docRels.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`)
-	for i := range entries {
+	for i := 1; i <= figureCount; i++ {
 		docRels.WriteString(fmt.Sprintf(`
     <Relationship Id="rId%d" 
         Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" 
-        Target="media/image%d.svg"/>`, i+1, i+1))
+        Target="media/image%d.svg"/>`, i, i))
 	}
 	docRels.WriteString("\n</Relationships>")
 
 	// --- Build the [Content_Types].xml ---
-	// Include overrides for the main document and for each image.
+	// Declare the main document and each image override.
 	var contentTypes bytes.Buffer
 	contentTypes.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Default Extension="xml" ContentType="application/xml"/>
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`)
-	for i := range entries {
+	for i := 1; i <= figureCount; i++ {
 		contentTypes.WriteString(fmt.Sprintf(`
-    <Override PartName="/word/media/image%d.svg" ContentType="image/svg+xml"/>`, i+1))
+    <Override PartName="/word/media/image%d.svg" ContentType="image/svg+xml"/>`, i))
 	}
 	contentTypes.WriteString("\n</Types>")
 
@@ -211,15 +237,19 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
 		return fmt.Errorf("error adding word/_rels/document.xml.rels: %v", err)
 	}
 
-	// Add each SVG file to the media folder.
-	for i, data := range svgDatas {
-		imgName := fmt.Sprintf("word/media/image%d.svg", i+1)
-		writer, err := zipWriter.Create(imgName)
-		if err != nil {
-			return fmt.Errorf("error creating image entry %q in ZIP: %v", imgName, err)
-		}
-		if _, err := writer.Write(data); err != nil {
-			return fmt.Errorf("error writing SVG data for %q: %v", imgName, err)
+	// Add each figure's SVG file to the media folder.
+	figureIndex = 0
+	for _, entry := range entries {
+		if entry.Type == "figure" {
+			figureIndex++
+			imgName := fmt.Sprintf("word/media/image%d.svg", figureIndex)
+			writer, err := zipWriter.Create(imgName)
+			if err != nil {
+				return fmt.Errorf("error creating image entry %q in ZIP: %v", imgName, err)
+			}
+			if _, err := writer.Write(figureData[figureIndex-1]); err != nil {
+				return fmt.Errorf("error writing SVG data for %q: %v", imgName, err)
+			}
 		}
 	}
 
@@ -227,16 +257,20 @@ func GenerateDocxFromSvgList(entries []SVGEntry, outputPath string) error {
 }
 
 func main() {
-	// Define a list of SVG files with legends.
-	entries := []SVGEntry{
-		{Legend: "Figure 1: First SVG image.", SvgPath: "input1.svg"},
-		{Legend: "Figure 2: Second SVG image.", SvgPath: "input2.svg"},
+	// Define a list of document entries.
+	// Entries of Type "figure" must specify an SVG file path and a legend.
+	// Entries of Type "text" specify the text to output.
+	entries := []DocumentEntry{
+		{Type: "figure", SvgPath: "input1.svg", Legend: "Figure 1: First SVG image."},
+		{Type: "text", Text: "This is a paragraph of descriptive text following the first figure."},
+		{Type: "figure", SvgPath: "input2.svg", Legend: "Figure 2: Second SVG image."},
+		{Type: "text", Text: "Another text paragraph following the second figure."},
 		// Add more entries as needed.
 	}
 
 	outputPath := "output.docx" // Output DOCX file path.
 
-	if err := GenerateDocxFromSvgList(entries, outputPath); err != nil {
+	if err := GenerateDocxFromEntries(entries, outputPath); err != nil {
 		log.Fatalf("Failed to generate DOCX: %v", err)
 	}
 	log.Printf("DOCX generated successfully at %s", outputPath)
